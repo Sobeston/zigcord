@@ -1,0 +1,12 @@
+[submodule "lib/hzzp"]
+	path = lib/hzzp
+	url = https://github.com/truemedian/hzzp/
+[submodule "lib/wz"]
+	path = lib/wz
+	url = https://github.com/truemedian/wz
+[submodule "lib/zig-bearssl"]
+	path = lib/zig-bearssl
+	url = https://github.com/MasterQ32/zig-bearssl/
+[submodule "lib/zig-network"]
+	path = lib/zig-network
+	url = https://github.com/MasterQ32/zig-network/
