@@ -29,6 +29,13 @@ pub const Event = struct {
     data: DiscordEvent,
 };
 
+fn heartbeatThread(session: *Session) void {
+    while (true) {
+        std.time.sleep(session.heartbeat_interval);
+        session.sendHeartbeat() catch {};
+    }
+}
+
 pub const Session = struct {
     ws: struct {
         x509: ssl.x509.Minimal,
@@ -64,7 +71,6 @@ pub const Session = struct {
     trust_anchor: ssl.TrustAnchorCollection,
     token: []const u8,
     heartbeat_interval: u64, // nanoseconds
-    last_sent_heartbeat: i128,
     last_received_sequence: u64,
     /// sets up ssl
     pub fn init(
@@ -115,7 +121,6 @@ pub const Session = struct {
             .allocator = allocator,
             .trust_anchor = trust_anchor,
             .heartbeat_interval = undefined,
-            .last_sent_heartbeat = undefined,
             .last_received_sequence = undefined,
         };
     }
@@ -194,8 +199,6 @@ pub const Session = struct {
             break :blk hb_ns orelse return error.NoHeartbeatIntervalReceived;
         };
 
-        self.last_sent_heartbeat = std.time.nanoTimestamp();
-
         //send identify to discord
         var identify_string = std.ArrayList(u8).init(self.allocator);
         defer identify_string.deinit();
@@ -224,12 +227,9 @@ pub const Session = struct {
         var event_buf = std.ArrayList(u8).init(self.allocator);
         defer event_buf.deinit();
 
-        while (true) {
-            if (self.last_sent_heartbeat + @as(i128, self.heartbeat_interval) < std.time.nanoTimestamp()) {
-                try self.sendHeartbeat();
-                self.last_sent_heartbeat = std.time.nanoTimestamp();
-            }
+        _ = try std.Thread.spawn(self, heartbeatThread);
 
+        while (true) {
             switch ((try self.ws.client.readEvent()).?) {
                 .header => continue,
                 .chunk => |chunk| {
@@ -255,7 +255,6 @@ pub const Session = struct {
             .{},
             heartbeat_string.writer()
         );
-
         try self.ws.client.writeMessageHeader(.{ .length = heartbeat_string.items.len, .opcode = 1 });
 
         var mask_buf = try self.allocator.alloc(u8, heartbeat_string.items.len);
@@ -312,6 +311,9 @@ pub const Session = struct {
     }
 
     pub fn sendMessage(self: *Session, channel: Snowflake, text: []const u8) !void {
+        self.http.socket = try net.connectToHost(self.allocator, "discordapp.com", 443, .tcp);
+        defer self.http.socket.close();
+
         var message_url = std.ArrayList(u8).init(self.allocator);
         defer message_url.deinit();
         try message_url.writer().print("/api/v6/channels/{}/messages", .{channel.data});
