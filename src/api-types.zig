@@ -56,15 +56,20 @@ pub const Stub = struct {
     s: ?UInt,
 };
 
+const MessageType = UInt;
+
 pub const MessageCreate = struct {
     t: String,
     s: UInt,
     op: UInt,
     d: struct {
-        content: String,
-        channel_id: String,
-        guild_id: String,
         id: String,
+        channel_id: String,
+        content: String,
+        tts: bool,
+        mention_everyone: bool,
+        pinned: bool,
+        @"type": MessageType,
     },
 };
 

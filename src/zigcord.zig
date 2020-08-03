@@ -10,13 +10,44 @@ const user_agent = "ZigCord (github.com/Sobeston/zigcord, v0.0.0)";
 
 pub const Snowflake = struct {
     data: u64,
+
+    pub fn format(
+        self: Snowflake,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        out_stream: anytype,
+    ) !void {
+        try out_stream.print("{}", .{self.data});
+    }
+};
+
+pub const MessageType = enum(u32) {
+    default,
+    recipient_add,
+    recipient_remove,
+    call,
+    channel_name_change,
+    channel_icon_change,
+    channel_pinned_message,
+    guild_member_join,
+    user_premium_guild_subscription,
+    user_premium_guild_subscription_tier_1,
+    user_premium_guild_subscription_tier_2,
+    user_premium_guild_subscription_tier_3,
+    channel_follow_add,
+    guild_discovery_disqualified,
+    guild_discovery_requalified,
+    _,
 };
 
 pub const Message = struct {
     id: Snowflake,
     channel_id: Snowflake,
-    guild_id: Snowflake,
     content: []const u8,
+    tts: bool,
+    mention_everyone: bool,
+    pinned: bool,
+    kind: MessageType,
 };
 
 pub const DiscordEvent = union(enum) {
@@ -295,10 +326,13 @@ pub const Session = struct {
                     break :blk .{
                         .message_create = .{
                             .id = Snowflake{ .data = std.fmt.parseInt(u64, message.d.id, 10) catch unreachable },
-                            .guild_id = Snowflake{ .data = std.fmt.parseInt(u64, message.d.guild_id, 10) catch unreachable },
                             .channel_id = Snowflake{ .data = std.fmt.parseInt(u64, message.d.channel_id, 10) catch unreachable },
                             .content = message.d.content,
-                        },
+                            .tts = message.d.tts,
+                            .mention_everyone = message.d.mention_everyone,
+                            .pinned = message.d.pinned,
+                            .kind = @intToEnum(MessageType, @intCast(@TagType(MessageType), message.d.@"type")),
+                        }
                     };
                 },
                 else => .{ .unknown = event_string },
