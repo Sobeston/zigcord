@@ -27,6 +27,11 @@ pub const Snowflake = struct {
     pub fn asChannel(self: Snowflake, writer: anytype) !void {
         try writer.print("<#{}>", .{self.data});
     }
+
+    /// nanosecond time
+    pub fn milliTimestamp(self: @This()) i64 {
+        return @intCast(i64, (self.data >> 22) + 1420070400000);
+    }
 };
 
 pub const MessageType = enum(u32) {
