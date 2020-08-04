@@ -15,9 +15,17 @@ pub const Snowflake = struct {
         self: Snowflake,
         comptime fmt: []const u8,
         options: std.fmt.FormatOptions,
-        out_stream: anytype,
+        writer: anytype,
     ) !void {
-        try out_stream.print("{}", .{self.data});
+        try writer.print("{}", .{self.data});
+    }
+
+    pub fn asMention(self: Snowflake, writer: anytype) !void {
+        try writer.print("<@{}>", .{self.data});
+    }
+
+    pub fn asChannel(self: Snowflake, writer: anytype) !void {
+        try writer.print("<#{}>", .{self.data});
     }
 };
 
@@ -282,9 +290,9 @@ pub const Session = struct {
         defer heartbeat_string.deinit();
 
         try std.json.stringify(
-            .{ .op = 1, .d = self.last_received_sequence},
+            .{ .op = 1, .d = self.last_received_sequence },
             .{},
-            heartbeat_string.writer()
+            heartbeat_string.writer(),
         );
         try self.ws.client.writeMessageHeader(.{ .length = heartbeat_string.items.len, .opcode = 1 });
 
@@ -292,7 +300,7 @@ pub const Session = struct {
         defer self.allocator.free(mask_buf);
         std.mem.secureZero(u8, mask_buf);
 
-        self.ws.client.maskPayload(heartbeat_string.items, mask_buf);      
+        self.ws.client.maskPayload(heartbeat_string.items, mask_buf);
         try self.ws.client.writeMessagePayload(mask_buf);
         try self.ws.ssl_socket.flush();
     }
@@ -332,7 +340,7 @@ pub const Session = struct {
                             .mention_everyone = message.d.mention_everyone,
                             .pinned = message.d.pinned,
                             .kind = @intToEnum(MessageType, @intCast(@TagType(MessageType), message.d.@"type")),
-                        }
+                        },
                     };
                 },
                 else => .{ .unknown = event_string },
