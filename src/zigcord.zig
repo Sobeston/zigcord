@@ -262,7 +262,7 @@ pub const Session = struct {
         try self.ws.client.writeMessageHeader(.{ .length = identify_string.items.len, .opcode = 1 });
         const mask_buf = try self.allocator.alloc(u8, identify_string.items.len);
         defer self.allocator.free(mask_buf);
-        std.mem.secureZero(u8, mask_buf);
+        for (mask_buf) |*m| m.* = 0;
         self.ws.client.maskPayload(identify_string.items, mask_buf);
         try self.ws.client.writeMessagePayload(mask_buf);
         try self.ws.ssl_socket.flush();
@@ -303,7 +303,7 @@ pub const Session = struct {
 
         var mask_buf = try self.allocator.alloc(u8, heartbeat_string.items.len);
         defer self.allocator.free(mask_buf);
-        std.mem.secureZero(u8, mask_buf);
+        for (mask_buf) |*m| m.* = 0;
 
         self.ws.client.maskPayload(heartbeat_string.items, mask_buf);
         try self.ws.client.writeMessagePayload(mask_buf);
