@@ -80,6 +80,8 @@ fn heartbeatThread(session: *Session) void {
     }
 }
 
+const SslSocket = ssl.Stream(*net.Socket.Reader, *net.Socket.Writer);
+
 pub const Session = struct {
     ws: struct {
         x509: ssl.x509.Minimal,
@@ -87,11 +89,11 @@ pub const Session = struct {
         socket: net.Socket,
         socket_reader: net.Socket.Reader,
         socket_writer: net.Socket.Writer,
-        ssl_socket: ssl.Stream(*net.Socket.Reader, *net.Socket.Writer),
+        ssl_socket: SslSocket,
         buffer: [512]u8 = std.mem.zeroes([512]u8),
         client: wz.BaseClient.BaseClient(
-            ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstInStream,
-            ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstOutStream,
+            SslSocket.DstInStream,
+            SslSocket.DstOutStream,
         ),
     },
     http: struct {
@@ -100,11 +102,11 @@ pub const Session = struct {
         socket: net.Socket,
         socket_reader: net.Socket.Reader,
         socket_writer: net.Socket.Writer,
-        ssl_socket: ssl.Stream(*net.Socket.Reader, *net.Socket.Writer),
+        ssl_socket: SslSocket,
         buffer: [512]u8 = std.mem.zeroes([512]u8),
         client: hzzp.BaseClient.BaseClient(
-            ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstInStream,
-            ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstOutStream,
+            SslSocket.DstInStream,
+            SslSocket.DstOutStream,
         ),
     },
     allocator: *std.mem.Allocator,
