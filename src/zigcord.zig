@@ -88,12 +88,10 @@ pub const Session = struct {
         socket_reader: net.Socket.Reader,
         socket_writer: net.Socket.Writer,
         ssl_socket: ssl.Stream(*net.Socket.Reader, *net.Socket.Writer),
-        ssl_socket_reader: ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstInStream,
-        ssl_socket_writer: ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstOutStream,
-        buffer: [1024]u8 = std.mem.zeroes([1024]u8),
+        buffer: [512]u8 = std.mem.zeroes([512]u8),
         client: wz.BaseClient.BaseClient(
-            *ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstInStream,
-            *ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstOutStream,
+            ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstInStream,
+            ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstOutStream,
         ),
     },
     http: struct {
@@ -103,12 +101,10 @@ pub const Session = struct {
         socket_reader: net.Socket.Reader,
         socket_writer: net.Socket.Writer,
         ssl_socket: ssl.Stream(*net.Socket.Reader, *net.Socket.Writer),
-        ssl_socket_reader: ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstInStream,
-        ssl_socket_writer: ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstOutStream,
-        buffer: [1024]u8 = std.mem.zeroes([1024]u8),
+        buffer: [512]u8 = std.mem.zeroes([512]u8),
         client: hzzp.BaseClient.BaseClient(
-            *ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstInStream,
-            *ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstOutStream,
+            ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstInStream,
+            ssl.Stream(*net.Socket.Reader, *net.Socket.Writer).DstOutStream,
         ),
     },
     allocator: *std.mem.Allocator,
@@ -146,8 +142,6 @@ pub const Session = struct {
                 .socket_reader = undefined,
                 .socket_writer = undefined,
                 .ssl_socket = undefined,
-                .ssl_socket_reader = undefined,
-                .ssl_socket_writer = undefined,
                 .client = undefined,
             },
             .http = .{
@@ -157,8 +151,6 @@ pub const Session = struct {
                 .socket_reader = undefined,
                 .socket_writer = undefined,
                 .ssl_socket = undefined,
-                .ssl_socket_reader = undefined,
-                .ssl_socket_writer = undefined,
                 .client = undefined,
             },
             .token = undefined,
@@ -187,26 +179,22 @@ pub const Session = struct {
             &self.ws.socket_reader,
             &self.ws.socket_writer,
         );
-        self.ws.ssl_socket_reader = self.ws.ssl_socket.inStream();
-        self.ws.ssl_socket_writer = self.ws.ssl_socket.outStream();
         self.http.ssl_socket = ssl.initStream(
             self.http.ssl_client.getEngine(),
             &self.http.socket_reader,
             &self.http.socket_writer,
         );
-        self.http.ssl_socket_reader = self.http.ssl_socket.inStream();
-        self.http.ssl_socket_writer = self.http.ssl_socket.outStream();
 
         // setup ws and http clients
         self.ws.client = wz.BaseClient.create(
             &self.ws.buffer,
-            &self.ws.ssl_socket_reader,
-            &self.ws.ssl_socket_writer,
+            self.ws.ssl_socket.inStream(),
+            self.ws.ssl_socket.outStream(),
         );
         self.http.client = hzzp.BaseClient.create(
             &self.http.buffer,
-            &self.http.ssl_socket_reader,
-            &self.http.ssl_socket_writer,
+            self.http.ssl_socket.inStream(),
+            self.http.ssl_socket.outStream(),
         );
     }
 
