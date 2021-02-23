@@ -30,6 +30,31 @@ pub const Context = struct {
     allocator: *std.mem.Allocator,
 };
 
+const HeartbeatContext = struct {
+    allocator: *std.mem.Allocator,
+    wss: *WSS,
+    ws_alive: *bool,
+    interval: u64,
+};
+
+fn heartbeatThread(ctx: HeartbeatContext) void {
+    var ns_last_sleep: u64 = undefined;
+    defer ctx.allocator.destroy(ctx.ws_alive);
+
+    while(true) {
+        std.time.sleep(ctx.interval - std.time.ms_per_s * 500);
+        if (!ctx.ws_alive.*) break;
+        const heartbeat = \\
+        \\{
+        \\    "op": 1,
+        \\    "d": null
+        \\}
+        ;
+        ctx.wss.writeHeader(.{ .opcode = .Text, .length = heartbeat.len }) catch return;
+        ctx.wss.writeChunk(heartbeat) catch return;
+    }
+}
+
 pub fn connect(
     allocator: *std.mem.Allocator,
     token: []const u8,
@@ -56,9 +81,12 @@ pub fn connect(
     );
 
     const gatewayURL = try getGatewayURL(&https, allocator);
+    defer allocator.free(gatewayURL);
 
     const ws_sock = try std.net.tcpConnectToHost(allocator, gatewayURL["wss://".len..], 443);
-    var wss_socket = try iguanatls.client_connect(.{
+    var wss_socket = try allocator.create(TLS);
+    defer allocator.destroy(wss_socket);
+    wss_socket.* = try iguanatls.client_connect(.{
         .cert_verifier = .none,
         .reader = ws_sock.reader(),
         .writer = ws_sock.writer(),
@@ -66,9 +94,11 @@ pub fn connect(
         .temp_allocator = allocator,
     }, gatewayURL["wss://".len..]);
 
-    var wss_buf: [256]u8 = undefined;
-    var wss = wz.base.client.create(
-        &wss_buf,
+    var wss_buf = try allocator.alloc(u8, 256);
+    var wss = try allocator.create(WSS);
+    defer allocator.destroy(wss);
+    wss.* = wz.base.client.create(
+        wss_buf,
         wss_socket.reader(),
         wss_socket.writer(),
     );
@@ -127,6 +157,17 @@ pub fn connect(
 
     try wss.writeHeader(.{ .opcode = .Text, .length = tmp.items.len });
     try wss.writeChunk(tmp.items);
+
+    std.time.sleep(std.time.ns_per_s);
+
+    var ws_alive = try allocator.create(bool);
+    ws_alive.* = true;
+    defer ws_alive.* = false;
+
+    const heartbeat_thread = try std.Thread.spawn(
+        HeartbeatContext{ .wss = wss, .interval = heartbeat_ms * std.time.ns_per_ms, .ws_alive = ws_alive, .allocator = allocator },
+        heartbeatThread,
+    );
 
     var discord_event_buffer = std.ArrayList(u8).init(allocator);
     defer discord_event_buffer.deinit();
