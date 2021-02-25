@@ -1,7 +1,7 @@
 const std = @import("std");
 const zigcord = @import("zigcord");
 
-fn handler(state: zigcord.Context, data: []const u8) void {
+fn handler(state: *zigcord.Conn, data: []const u8) void {
     std.debug.print("handling bytes: {s}\n", .{data});
 }
 
@@ -16,5 +16,5 @@ pub fn main() !void {
     const token = try token_file.readToEndAlloc(allocator, 1024);
     defer allocator.free(token);
 
-    try zigcord.connect(allocator, token, .{ .guild_messages = true }, handler);
+    try zigcord.Conn.create(allocator, token, .{ .guild_messages = true }, handler);
 }

@@ -4,7 +4,6 @@
 -  Send HTTP messages back to discord
 
 # What ZigCord does not do (yet)
--  Send heartbeats
 -  Handle reconnects
 -  Parse discord's events for you
 -  Give you helper functions for sending events (e.g. messages) to discord

@@ -5,7 +5,7 @@ const wz = @import("wz");
 
 const TLS = iguanatls.Client(std.net.Stream.Reader, std.net.Stream.Writer, iguanatls.ciphersuites.all, false);
 const WSS = wz.base.client.BaseClient(TLS.Reader, TLS.Writer);
-pub const HTTPS = hzzp.base.client.BaseClient(TLS.Reader, TLS.Writer);
+const HTTPS = hzzp.base.client.BaseClient(TLS.Reader, TLS.Writer);
 
 pub const Intents = packed struct {
     guilds: bool = false,
@@ -25,169 +25,164 @@ pub const Intents = packed struct {
     direct_message_typing: bool = false,
 };
 
-pub const Context = struct {
-    https: *HTTPS,
-    allocator: *std.mem.Allocator,
-};
-
-const HeartbeatContext = struct {
-    allocator: *std.mem.Allocator,
-    wss: *WSS,
-    ws_alive: *bool,
-    interval: u64,
-};
-
-fn heartbeatThread(ctx: HeartbeatContext) void {
-    var ns_last_sleep: u64 = undefined;
-    defer ctx.allocator.destroy(ctx.ws_alive);
-
-    while(true) {
-        std.time.sleep(ctx.interval - std.time.ms_per_s * 500);
-        if (!ctx.ws_alive.*) break;
-        const heartbeat = \\
-        \\{
-        \\    "op": 1,
-        \\    "d": null
-        \\}
+fn heartbeatThread(self: *Conn) void {
+    while (true) {
+        std.time.sleep(self.ns_heartbeat_interval - std.time.ms_per_s * 500);
+        const heartbeat =
+            \\{
+            \\    "op": 1,
+            \\    "d": null
+            \\}
         ;
-        ctx.wss.writeHeader(.{ .opcode = .Text, .length = heartbeat.len }) catch return;
-        ctx.wss.writeChunk(heartbeat) catch return;
+        self.wss_client.writeHeader(.{ .opcode = .Text, .length = heartbeat.len }) catch return;
+        self.wss_client.writeChunk(heartbeat) catch return;
     }
 }
 
-pub fn connect(
+pub const Conn = struct {
     allocator: *std.mem.Allocator,
-    token: []const u8,
+    prng: std.rand.DefaultPrng,
+
+    gateway_url: []u8,
     intents: Intents,
-    handler: fn (Context, []const u8) void,
-) !void {
-    var prng = std.rand.DefaultPrng.init(0);
-    const rand = &prng.random;
 
-    const http_sock = try std.net.tcpConnectToHost(allocator, domains.main, 443);
-    var https_socket = try iguanatls.client_connect(.{
-        .cert_verifier = .none,
-        .reader = http_sock.reader(),
-        .writer = http_sock.writer(),
-        .rand = rand,
-        .temp_allocator = allocator,
-    }, domains.main);
+    https_client: HTTPS,
+    https_client_buf: [256]u8, //arbitrarily chosen; TODO: audit
 
-    var https_buf: [256]u8 = undefined;
-    var https = hzzp.base.client.create(
-        &https_buf,
-        https_socket.reader(),
-        https_socket.writer(),
-    );
+    wss_client: WSS,
+    wss_client_buf: [256]u8,   //arbitrarily chosen; TODO: audit
 
-    const gatewayURL = try getGatewayURL(&https, allocator);
-    defer allocator.free(gatewayURL);
+    ns_heartbeat_interval: u64,
 
-    const ws_sock = try std.net.tcpConnectToHost(allocator, gatewayURL["wss://".len..], 443);
-    var wss_socket = try allocator.create(TLS);
-    defer allocator.destroy(wss_socket);
-    wss_socket.* = try iguanatls.client_connect(.{
-        .cert_verifier = .none,
-        .reader = ws_sock.reader(),
-        .writer = ws_sock.writer(),
-        .rand = rand,
-        .temp_allocator = allocator,
-    }, gatewayURL["wss://".len..]);
+    pub fn create(allocator: *std.mem.Allocator, token: []const u8, intents: Intents, handler: fn (*Conn, []const u8) void) !void {
+        const self = try allocator.create(Conn);
+        defer allocator.destroy(self);
+        self.allocator = allocator;
+        self.prng = std.rand.DefaultPrng.init(0);
+        self.intents = intents;
+        var prng = std.rand.DefaultPrng.init(0);
+        const rand = &prng.random;
 
-    var wss_buf = try allocator.alloc(u8, 256);
-    var wss = try allocator.create(WSS);
-    defer allocator.destroy(wss);
-    wss.* = wz.base.client.create(
-        wss_buf,
-        wss_socket.reader(),
-        wss_socket.writer(),
-    );
+        //init https connection
+        const http_sock = try std.net.tcpConnectToHost(self.allocator, domains.main, 443);
+        var http_sock_TLS = try iguanatls.client_connect(.{
+            .cert_verifier = .none,
+            .reader = http_sock.reader(),
+            .writer = http_sock.writer(),
+            .rand = rand,
+            .temp_allocator = self.allocator,
+        }, domains.main);
+        self.https_client = hzzp.base.client.create(
+            &self.https_client_buf,
+            http_sock_TLS.reader(),
+            http_sock_TLS.writer(),
+        );
 
-    try wss.handshakeStart("/?v=8&encoding=json");
-    try wss.handshakeAddHeaderValue("Host", gatewayURL["wss://".len..]);
-    try wss.handshakeAddHeaderValue("authorization", token);
-    try wss.handshakeAddHeaderValue("User-Agent", user_agent);
-    try wss.handshakeFinish();
+        //ask discord for ws gateway URL
+        self.gateway_url = try getGatewayURL(&self.https_client, self.allocator);
+        defer self.allocator.free(self.gateway_url);
 
-    var got_hello = false;
-    var heartbeat_ms: usize = undefined;
-    var time_since_last_heartbeat: std.time.Timer = undefined;
-    _ = (try wss.next()).?;
-    if (try wss.next()) |ev| {
-        const chunk = ev.chunk;
-        var parser = std.json.Parser.init(allocator, true);
-        defer parser.deinit();
-        var tree = try parser.parse(chunk.data);
-        defer tree.deinit();
-        if (tree.root != .Object) return error.InvalidHelloReceived;
-        if (tree.root.Object.get("op")) |op| {
-            if (op != .Integer) return error.InvalidHelloReceived;
-            if (op.Integer != 10) return error.InvalidHelloReceived;
-        } else return error.InvalidHelloReceived;
-        if (tree.root.Object.get("d")) |d| {
-            if (d != .Object) return error.InvalidHelloReceived;
-            if (d.Object.get("heartbeat_interval")) |beat_interval| {
-                if (beat_interval != .Integer) return error.InvalidHelloReceived;
-                heartbeat_ms = @intCast(u32, beat_interval.Integer);
-                time_since_last_heartbeat = std.time.Timer.start() catch unreachable;
-                got_hello = true;
-            } else return error.InvalidHelloReceived;
-        } else return error.InvalidHelloReceived;
-    }
-    if (!got_hello) return error.NoHelloReceived;
+        //initialise wss connection
+        const ws_sock = try std.net.tcpConnectToHost(allocator, self.gateway_url["wss://".len..], 443);
+        var ws_socket_TLS = try iguanatls.client_connect(.{
+            .cert_verifier = .none,
+            .reader = ws_sock.reader(),
+            .writer = ws_sock.writer(),
+            .rand = rand,
+            .temp_allocator = allocator,
+        }, self.gateway_url["wss://".len..]);
+        self.wss_client = wz.base.client.create(
+            &self.wss_client_buf,
+            ws_socket_TLS.reader(),
+            ws_socket_TLS.writer(),
+        );
 
-    var tmp = std.ArrayList(u8).init(allocator);
-    defer tmp.deinit();
-    try tmp.writer().print(
-        \\{{
-        \\  "op":2,
-        \\  "d":{{
-        \\      "token":"{s}",
-        \\      "intents":{d},
-        \\      "properties":{{
-        \\          "$os":"{s}",
-        \\          "$browser":"{s}",
-        \\          "$device":"{s}"
-        \\      }}
-        \\  }}
-        \\}}
-    ,
-        .{ token, @bitCast(std.meta.Int(.unsigned, @bitSizeOf(Intents)), intents),  @tagName(std.builtin.Target.current.os.tag), user_agent, user_agent },
-    );
+        try self.wss_client.handshakeStart("/?v=8&encoding=json");
+        try self.wss_client.handshakeAddHeaderValue("Host", self.gateway_url["wss://".len..]);
+        try self.wss_client.handshakeAddHeaderValue("authorization", token);
+        try self.wss_client.handshakeAddHeaderValue("User-Agent", user_agent);
+        try self.wss_client.handshakeFinish();
 
-    try wss.writeHeader(.{ .opcode = .Text, .length = tmp.items.len });
-    try wss.writeChunk(tmp.items);
+        //skips the first header, parses the discord hello payload
+        _ = (try self.wss_client.next()) orelse return error.NoHelloReceived;
+        self.ns_heartbeat_interval = if (try self.wss_client.next()) |event| blk: {
+            var parser = std.json.Parser.init(self.allocator, true);
+            defer parser.deinit();
+            var tree = try parser.parse(event.chunk.data);
+            defer tree.deinit();
 
-    std.time.sleep(std.time.ns_per_s);
+            const err = error.InvalidGatewayHello;
+            const root_obj = switch (tree.root) {
+                .Object => |root_obj| root_obj,
+                else => return err,
+            };
 
-    var ws_alive = try allocator.create(bool);
-    ws_alive.* = true;
-    defer ws_alive.* = false;
+            switch (root_obj.get("op") orelse return err) {
+                .Integer => |opcode| {
+                    if (opcode != 10) return err;
+                },
+                else => return err,
+            }
 
-    const heartbeat_thread = try std.Thread.spawn(
-        HeartbeatContext{ .wss = wss, .interval = heartbeat_ms * std.time.ns_per_ms, .ws_alive = ws_alive, .allocator = allocator },
-        heartbeatThread,
-    );
+            break :blk switch (root_obj.get("d") orelse return err) {
+                .Object => |d_obj| switch (d_obj.get("heartbeat_interval") orelse return err) {
+                    .Integer => |x| @intCast(u32, x),
+                    else => return err,
+                },
+                else => return err,
+            } * @intCast(u64, std.time.ns_per_ms);
+        } else return error.NoHelloReceived;
 
-    var discord_event_buffer = std.ArrayList(u8).init(allocator);
-    defer discord_event_buffer.deinit();
-    while (try wss.next()) |event| {
-        switch (event) {
-            .header => {},
-            .chunk => |c| {
-                try discord_event_buffer.appendSlice(c.data);
-                if (c.final) {
-                    handler(.{ .https = &https, .allocator = allocator }, discord_event_buffer.items);
-                    discord_event_buffer.shrinkAndFree(0);
-                }
+        //send identify payload
+        var tmp = std.ArrayList(u8).init(allocator);
+        defer tmp.deinit();
+        try tmp.writer().print(
+            \\{{
+            \\  "op":2,
+            \\  "d":{{
+            \\      "token":"{s}",
+            \\      "intents":{d},
+            \\      "properties":{{
+            \\          "$os":"{s}",
+            \\          "$browser":"{s}",
+            \\          "$device":"{s}"
+            \\      }}
+            \\  }}
+            \\}}
+        ,
+            .{
+                token,
+                @bitCast(std.meta.Int(.unsigned, @bitSizeOf(Intents)), intents),
+                @tagName(std.builtin.Target.current.os.tag),
+                user_agent,
+                user_agent,
             },
+        );
+        try self.wss_client.writeHeader(.{ .opcode = .Text, .length = tmp.items.len });
+        try self.wss_client.writeChunk(tmp.items);
+
+        _ = try std.Thread.spawn(self, heartbeatThread);
+
+        //pass each discord event to handler
+        var discord_event_buffer = std.ArrayList(u8).init(allocator);
+        defer discord_event_buffer.deinit();
+        while (try self.wss_client.next()) |event| {
+            switch (event) {
+                .header => {},
+                .chunk => |c| {
+                    try discord_event_buffer.appendSlice(c.data);
+                    if (c.final) {
+                        handler(self, discord_event_buffer.items);
+                        discord_event_buffer.shrinkAndFree(0);
+                    }
+                },
+            }
         }
     }
-}
+};
 
 /// caller must free returned memory
-fn getGatewayURL(https: *HTTPS, allocator: *std.mem.Allocator) ![]const u8 {
-    var gateway: []const u8 = &[_]u8{};
+fn getGatewayURL(https: *HTTPS, allocator: *std.mem.Allocator) ![]u8 {
     try https.writeStatusLine("GET", endpoints.gateway);
     try https.writeHeader(.{ .name = "Host", .value = domains.main });
     try https.finishHeaders();
