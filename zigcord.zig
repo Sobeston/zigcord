@@ -54,7 +54,7 @@ pub const Conn = struct {
 
     ns_heartbeat_interval: u64,
 
-    pub fn create(allocator: *std.mem.Allocator, token: []const u8, intents: Intents, handler: fn (*Conn, []const u8) void) !void {
+    pub fn create(allocator: *std.mem.Allocator, token: []const u8, intents: Intents, handler: fn (*Conn, Event) void) !void {
         const self = try allocator.create(Conn);
         defer allocator.destroy(self);
         self.allocator = allocator;
@@ -172,8 +172,13 @@ pub const Conn = struct {
                 .chunk => |c| {
                     try discord_event_buffer.appendSlice(c.data);
                     if (c.final) {
-                        handler(self, discord_event_buffer.items);
-                        discord_event_buffer.shrinkAndFree(0);
+                        var arena = std.heap.ArenaAllocator.init(self.allocator);
+                        defer arena.deinit();
+                        defer discord_event_buffer.shrinkAndFree(0);
+                        handler(
+                            self,
+                            (try Event.fromRaw(&arena.allocator, discord_event_buffer.items)) orelse continue,
+                        );
                     }
                 },
             }
@@ -204,6 +209,110 @@ fn getGatewayURL(https: *HTTPS, allocator: *std.mem.Allocator) ![]u8 {
     };
     return error.NoGatewayResponse;
 }
+
+pub const Event = union(enum) {
+    const err = error.InvalidEvent;
+
+    pub const MessageCreate = struct {
+        id: []const u8,
+        channel_id: []const u8,
+        guild_id: []const u8,
+        content: []const u8,
+        author: struct {
+            username: []const u8,
+            id: []const u8,
+        },
+        pub fn format(
+            self: MessageCreate,
+            comptime fmt: []const u8,
+            options: std.fmt.FormatOptions,
+            writer: anytype,
+        ) !void {
+            try writer.print(
+                \\MessageCreate{{
+                \\    .id = "{s}",
+                \\    .channel_id = "{s}",
+                \\    .guild_id = "{s}",
+                \\    .content = "{s}",
+                \\    .author = {{
+                \\        .username = "{s}",
+                \\        .id = "{s}",
+                \\    }}
+                \\}}
+            , .{self.id, self.channel_id, self.guild_id, self.content, self.author.username, self.author.id});
+        }
+        fn parse(d: std.json.ObjectMap) !MessageCreate {
+            const author = switch (d.get("author") orelse return err) {
+                .Object => |o| o,
+                else => return err,
+            };
+
+            return MessageCreate{
+                .id = switch (d.get("id") orelse return err) {
+                    .String => |s| s,
+                    else => return err,
+                },
+                .channel_id = switch (d.get("channel_id") orelse return err) {
+                    .String => |s| s,
+                    else => return err,
+                },
+                .guild_id = switch (d.get("guild_id") orelse return err) {
+                    .String => |s| s,
+                    else => return err,
+                },
+                .content = switch (d.get("content") orelse return err) {
+                    .String => |s| s,
+                    else => return err,
+                },
+                .author = .{
+                    .username = switch (author.get("username") orelse return err) {
+                        .String => |s| s,
+                        else => return err,
+                    },
+                    .id = switch (author.get("id") orelse return err) {
+                        .String => |s| s,
+                        else => return err,
+                    },
+                },
+            };
+        }
+    };
+
+    ///returns null when opcode != 0
+    ///does not free its memory
+    fn fromRaw(allocator: *std.mem.Allocator, data: []const u8) !?Event {
+        var parser = std.json.Parser.init(allocator, true);
+        var tree = try parser.parse(data);
+
+        const root_obj = switch (tree.root) {
+            .Object => |root_obj| root_obj,
+            else => return err,
+        };
+
+        if (switch (root_obj.get("op") orelse return err) {
+            .Integer => |i| i,
+            else => return err
+        } != 0) return null;
+
+        const payload_string = switch (root_obj.get("t") orelse return err) {
+            .String => |s| s,
+            else => return err
+        };
+
+        const d = switch(root_obj.get("d") orelse return err) {
+            .Object => |o| o,
+            else => return err,
+        };
+
+        if (std.mem.eql(u8, payload_string, "MESSAGE_CREATE")) return Event {
+            .message_create = try Event.MessageCreate.parse(d)
+        };
+
+        return Event{ .unknown = data };
+    }
+    message_create: MessageCreate,
+    unknown: []const u8,
+};
 
 const domains = struct {
     const main = "discordapp.com";

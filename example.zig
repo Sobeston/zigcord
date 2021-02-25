@@ -1,8 +1,15 @@
 const std = @import("std");
 const zigcord = @import("zigcord");
 
-fn handler(state: *zigcord.Conn, data: []const u8) void {
-    std.debug.print("handling bytes: {s}\n", .{data});
+fn handler(state: *zigcord.Conn, event: zigcord.Event) void {
+    switch (event) {
+        .message_create => |msg| {
+            std.debug.print("{}\n", .{msg});
+        },
+        .unknown => |unk| {
+            std.debug.print("unknown event:\n{s}\n", .{unk});
+        },
+    }
 }
 
 pub fn main() !void {
