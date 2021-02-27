@@ -4,11 +4,12 @@ const zigcord = @import("zigcord");
 fn handler(state: *zigcord.Conn, event: zigcord.Event) void {
     switch (event) {
         .message_create => |msg| {
-            std.debug.print("{}\n", .{msg});
+            std.debug.print(
+                \\{s}: "{s}"
+                \\
+            , .{msg.author.username, msg.content});
         },
-        .unknown => |unk| {
-            std.debug.print("unknown event:\n{s}\n", .{unk});
-        },
+        else => {},
     }
 }
 

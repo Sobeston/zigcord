@@ -53,6 +53,7 @@ pub const Conn = struct {
     wss_client_buf: [256]u8,   //arbitrarily chosen; TODO: audit
 
     ns_heartbeat_interval: u64,
+    last_sequence: std.atomic.Int(u64),
 
     pub fn create(allocator: *std.mem.Allocator, token: []const u8, intents: Intents, handler: fn (*Conn, Event) void) !void {
         const self = try allocator.create(Conn);
@@ -60,6 +61,7 @@ pub const Conn = struct {
         self.allocator = allocator;
         self.prng = std.rand.DefaultPrng.init(0);
         self.intents = intents;
+        self.last_sequence = std.atomic.Int(u64).init(0);
         var prng = std.rand.DefaultPrng.init(0);
         const rand = &prng.random;
 
@@ -172,12 +174,29 @@ pub const Conn = struct {
                 .chunk => |c| {
                     try discord_event_buffer.appendSlice(c.data);
                     if (c.final) {
-                        var arena = std.heap.ArenaAllocator.init(self.allocator);
-                        defer arena.deinit();
                         defer discord_event_buffer.shrinkAndFree(0);
+
+                        var parser = std.json.Parser.init(self.allocator, true);
+                        defer parser.deinit();
+                        var tree = try parser.parse(discord_event_buffer.items);
+                        defer tree.deinit();
+
+                        const root_obj = switch (tree.root) {
+                            .Object => |root_obj| root_obj,
+                            else => return Event.err,
+                        };
+
+                        if (root_obj.get("s")) |s| switch (s) {
+                            .Integer => |i| self.last_sequence.set(@intCast(u64, i)),
+                            .Null => {},
+                            else => {
+                                return Event.err;
+                            },
+                        };
+
                         handler(
                             self,
-                            (try Event.fromRaw(&arena.allocator, discord_event_buffer.items)) orelse continue,
+                            (try Event.fromRaw(root_obj)) orelse continue,
                         );
                     }
                 },
@@ -279,16 +298,7 @@ pub const Event = union(enum) {
     };
 
     ///returns null when opcode != 0
-    ///does not free its memory
-    fn fromRaw(allocator: *std.mem.Allocator, data: []const u8) !?Event {
-        var parser = std.json.Parser.init(allocator, true);
-        var tree = try parser.parse(data);
-
-        const root_obj = switch (tree.root) {
-            .Object => |root_obj| root_obj,
-            else => return err,
-        };
-
+    fn fromRaw(root_obj: std.json.ObjectMap) !?Event {
         if (switch (root_obj.get("op") orelse return err) {
             .Integer => |i| i,
             else => return err
@@ -308,10 +318,10 @@ pub const Event = union(enum) {
             .message_create = try Event.MessageCreate.parse(d)
         };
 
-        return Event{ .unknown = data };
+        return Event{ .unknown = d };
     }
     message_create: MessageCreate,
-    unknown: []const u8,
+    unknown: std.json.ObjectMap,
 };
 
 const domains = struct {
