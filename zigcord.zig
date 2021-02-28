@@ -54,6 +54,7 @@ pub const Conn = struct {
 
     ns_heartbeat_interval: u64,
     last_sequence: std.atomic.Int(u64),
+    session_id: ?[]u8,
 
     pub fn create(allocator: *std.mem.Allocator, token: []const u8, intents: Intents, handler: fn (*Conn, Event) void) !void {
         const self = try allocator.create(Conn);
@@ -194,10 +195,15 @@ pub const Conn = struct {
                             },
                         };
 
-                        handler(
-                            self,
-                            (try Event.fromRaw(root_obj)) orelse continue,
-                        );
+                        const d_event = try Event.fromRaw(root_obj);
+                        if (d_event) |ev| switch (ev) {
+                            .ready => |r| {
+                                self.session_id = try self.allocator.dupe(u8, r.session_id);
+                            },
+                            else => {},
+                        };
+
+                        handler(self, d_event orelse continue);
                     }
                 },
             }
