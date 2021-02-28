@@ -9,6 +9,11 @@ fn handler(state: *zigcord.Conn, event: zigcord.Event) void {
                 \\
             , .{msg.author.username, msg.content});
         },
+        .ready => |ready| {
+            std.debug.print("{s} (ID: {s}) connected\n", .{
+                ready.user.username, ready.user.id
+            });
+        },
         else => {},
     }
 }

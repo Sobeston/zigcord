@@ -231,6 +231,9 @@ fn getGatewayURL(https: *HTTPS, allocator: *std.mem.Allocator) ![]u8 {
 
 pub const Event = union(enum) {
     const err = error.InvalidEvent;
+    message_create: MessageCreate,
+    ready: Ready,
+    unknown: std.json.ObjectMap,
 
     pub const MessageCreate = struct {
         id: []const u8,
@@ -297,6 +300,61 @@ pub const Event = union(enum) {
         }
     };
 
+    pub const Ready = struct {
+        v: i64,
+        session_id: []const u8,
+        user: struct {
+            username: []const u8,
+            id: []const u8,
+        },
+
+        fn parse(d: std.json.ObjectMap) !Ready {
+            const user = switch (d.get("user") orelse return err) {
+                .Object => |o| o,
+                else => return err,
+            };
+
+            return Ready {
+                .v = switch (d.get("v") orelse return err) {
+                    .Integer => |i| i,
+                    else => return err,
+                },
+                .session_id = switch (d.get("session_id") orelse return err) {
+                    .String => |s| s,
+                    else => return err,
+                },
+                .user = .{
+                    .username = switch (user.get("username") orelse return err) {
+                        .String => |s| s,
+                        else => return err,
+                    },
+                    .id = switch (user.get("id") orelse return err) {
+                        .String => |s| s,
+                        else => return err,
+                    },
+                },
+            };
+        }
+
+        pub fn format(
+            self: Ready,
+            comptime fmt: []const u8,
+            options: std.fmt.FormatOptions,
+            writer: anytype,
+        ) !void {
+            try writer.print(
+                \\Ready{{
+                \\    .v = "{s}",
+                \\    .session_id = "{s}",
+                \\    .user = {{
+                \\        .username = "{s}",
+                \\        .id = "{s}",
+                \\    }}
+                \\}}
+            , .{self.v, self.session_id, self.user.username, self.user.id});
+        }
+    };
+
     ///returns null when opcode != 0
     fn fromRaw(root_obj: std.json.ObjectMap) !?Event {
         if (switch (root_obj.get("op") orelse return err) {
@@ -317,11 +375,12 @@ pub const Event = union(enum) {
         if (std.mem.eql(u8, payload_string, "MESSAGE_CREATE")) return Event {
             .message_create = try Event.MessageCreate.parse(d)
         };
+        if (std.mem.eql(u8, payload_string, "READY")) return Event {
+            .ready = try Event.Ready.parse(d)
+        };
 
         return Event{ .unknown = d };
     }
-    message_create: MessageCreate,
-    unknown: std.json.ObjectMap,
 };
 
 const domains = struct {
