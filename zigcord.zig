@@ -171,15 +171,30 @@ pub const Conn = struct {
         //pass each discord event to handler
         var discord_event_buffer = std.ArrayList(u8).init(allocator);
         defer discord_event_buffer.deinit();
+        var last_header: ?wz.base.client.MessageHeader = null;
         while (try self.wss_client.next()) |event| switch (event) {
-            .header => {},
+            .header => |h| last_header = h,
             .chunk => |c| {
                 try discord_event_buffer.appendSlice(c.data);
                 if (!c.final) continue;
                 defer discord_event_buffer.shrinkAndFree(0);
 
+                if (last_header.opcode == .Close) {
+                    const x = 
+                    \\{
+                    \\    "op": {d},
+                    \\    "d": {
+                    \\        "token": "{s}",
+                    \\        "session_id": "{s}",
+                    \\        "seq": {d}
+                    \\    }
+                    \\}
+                    ;
+                }
+
                 var parser = std.json.Parser.init(self.allocator, true);
                 defer parser.deinit();
+                std.debug.print("{s}\n", .{discord_event_buffer.items});
                 var tree = try parser.parse(discord_event_buffer.items);
                 defer tree.deinit();
 
