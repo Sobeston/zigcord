@@ -34,8 +34,8 @@ fn heartbeatThread(self: *Conn) void {
             \\    "d": null
             \\}
         ;
-        self.wss_client.writeHeader(.{ .opcode = .Text, .length = heartbeat.len }) catch return;
-        self.wss_client.writeChunk(heartbeat) catch return;
+        // self.wss_client.writeHeader(.{ .opcode = .Text, .length = heartbeat.len }) catch return;
+        // self.wss_client.writeChunk(heartbeat) catch return;
     }
 }
 
@@ -165,6 +165,8 @@ pub const Conn = struct {
         try self.wss_client.writeChunk(tmp.items);
 
         _ = try std.Thread.spawn(self, heartbeatThread);
+
+        defer if (self.session_id) |s| self.allocator.free(s);
 
         //pass each discord event to handler
         var discord_event_buffer = std.ArrayList(u8).init(allocator);
