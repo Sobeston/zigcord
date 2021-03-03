@@ -50,7 +50,7 @@ pub const Conn = struct {
     https_client_buf: [256]u8, //arbitrarily chosen; TODO: audit
 
     wss_client: WSS,
-    wss_client_buf: [256]u8,   //arbitrarily chosen; TODO: audit
+    wss_client_buf: [256]u8, //arbitrarily chosen; TODO: audit
 
     ns_heartbeat_interval: u64,
     last_sequence: std.atomic.Int(u64),
@@ -169,45 +169,49 @@ pub const Conn = struct {
         //pass each discord event to handler
         var discord_event_buffer = std.ArrayList(u8).init(allocator);
         defer discord_event_buffer.deinit();
-        while (try self.wss_client.next()) |event| {
-            switch (event) {
-                .header => {},
-                .chunk => |c| {
-                    try discord_event_buffer.appendSlice(c.data);
-                    if (c.final) {
-                        defer discord_event_buffer.shrinkAndFree(0);
+        while (try self.wss_client.next()) |event| switch (event) {
+            .header => {},
+            .chunk => |c| {
+                try discord_event_buffer.appendSlice(c.data);
+                if (!c.final) continue;
+                defer discord_event_buffer.shrinkAndFree(0);
 
-                        var parser = std.json.Parser.init(self.allocator, true);
-                        defer parser.deinit();
-                        var tree = try parser.parse(discord_event_buffer.items);
-                        defer tree.deinit();
+                var parser = std.json.Parser.init(self.allocator, true);
+                defer parser.deinit();
+                var tree = try parser.parse(discord_event_buffer.items);
+                defer tree.deinit();
 
-                        const root_obj = switch (tree.root) {
-                            .Object => |root_obj| root_obj,
-                            else => return Event.err,
-                        };
+                const root_obj = switch (tree.root) {
+                    .Object => |root_obj| root_obj,
+                    else => return Event.err,
+                };
 
-                        if (root_obj.get("s")) |s| switch (s) {
-                            .Integer => |i| self.last_sequence.set(@intCast(u64, i)),
-                            .Null => {},
-                            else => {
-                                return Event.err;
-                            },
-                        };
+                if (root_obj.get("s")) |s| switch (s) {
+                    .Integer => |i| self.last_sequence.set(@intCast(u64, i)),
+                    .Null => {},
+                    else => {
+                        return Event.err;
+                    },
+                };
 
-                        const d_event = try Event.fromRaw(root_obj);
-                        if (d_event) |ev| switch (ev) {
+                switch (switch (root_obj.get("op") orelse return Event.err) {
+                    .Integer => |i| i,
+                    else => return Event.err,
+                }) {
+                    0 => {
+                        const ev = try Event.fromRaw(root_obj);
+                        switch (ev) {
                             .ready => |r| {
                                 self.session_id = try self.allocator.dupe(u8, r.session_id);
                             },
                             else => {},
-                        };
-
-                        handler(self, d_event orelse continue);
-                    }
-                },
-            }
-        }
+                        }
+                        handler(self, ev);
+                    },
+                    else => {},
+                }
+            },
+        };
     }
 };
 
@@ -267,7 +271,7 @@ pub const Event = union(enum) {
                 \\        .id = "{s}",
                 \\    }}
                 \\}}
-            , .{self.id, self.channel_id, self.guild_id, self.content, self.author.username, self.author.id});
+            , .{ self.id, self.channel_id, self.guild_id, self.content, self.author.username, self.author.id });
         }
         fn parse(d: std.json.ObjectMap) !MessageCreate {
             const author = switch (d.get("author") orelse return err) {
@@ -320,7 +324,7 @@ pub const Event = union(enum) {
                 else => return err,
             };
 
-            return Ready {
+            return Ready{
                 .v = switch (d.get("v") orelse return err) {
                     .Integer => |i| i,
                     else => return err,
@@ -357,33 +361,25 @@ pub const Event = union(enum) {
                 \\        .id = "{s}",
                 \\    }}
                 \\}}
-            , .{self.v, self.session_id, self.user.username, self.user.id});
+            , .{ self.v, self.session_id, self.user.username, self.user.id });
         }
     };
 
-    ///returns null when opcode != 0
-    fn fromRaw(root_obj: std.json.ObjectMap) !?Event {
-        if (switch (root_obj.get("op") orelse return err) {
-            .Integer => |i| i,
-            else => return err
-        } != 0) return null;
-
+    fn fromRaw(root_obj: std.json.ObjectMap) !Event {
         const payload_string = switch (root_obj.get("t") orelse return err) {
             .String => |s| s,
-            else => return err
+            else => return err,
         };
 
-        const d = switch(root_obj.get("d") orelse return err) {
+        const d = switch (root_obj.get("d") orelse return err) {
             .Object => |o| o,
             else => return err,
         };
 
-        if (std.mem.eql(u8, payload_string, "MESSAGE_CREATE")) return Event {
-            .message_create = try Event.MessageCreate.parse(d)
-        };
-        if (std.mem.eql(u8, payload_string, "READY")) return Event {
-            .ready = try Event.Ready.parse(d)
-        };
+        if (std.mem.eql(u8, payload_string, "MESSAGE_CREATE"))
+            return Event{ .message_create = try Event.MessageCreate.parse(d) };
+        if (std.mem.eql(u8, payload_string, "READY"))
+            return Event{ .ready = try Event.Ready.parse(d) };
 
         return Event{ .unknown = d };
     }
