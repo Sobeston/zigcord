@@ -34,8 +34,8 @@ fn heartbeatThread(self: *Conn) void {
             \\    "d": null
             \\}
         ;
-        // self.wss_client.writeHeader(.{ .opcode = .Text, .length = heartbeat.len }) catch return;
-        // self.wss_client.writeChunk(heartbeat) catch return;
+        self.wss_client.writeHeader(.{ .opcode = .Text, .length = heartbeat.len }) catch return;
+        self.wss_client.writeChunk(heartbeat) catch return;
     }
 }
 
